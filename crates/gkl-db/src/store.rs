@@ -141,12 +141,14 @@ impl Db {
         }
     }
 
-    /// 清空全部索引(重建用)。
+    /// 清空全部索引(重建用)。commit 表与扫描状态一并清零。
     pub fn reset(&self) -> anyhow::Result<()> {
         let txn = self.db.begin_write()?;
         {
             txn.delete_table(T_META)?;
+            txn.delete_table(T_STATE)?;
             let _t = txn.open_table(T_META)?;
+            let _t = txn.open_table(T_STATE)?;
         }
         txn.commit()?;
         Ok(())
