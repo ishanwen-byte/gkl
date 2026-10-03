@@ -207,8 +207,18 @@ impl Db {
             let mut t = txn.open_table(T_CHURN)?;
             let mut cache: std::collections::HashMap<String, ChurnEntry> = std::collections::HashMap::new();
             for m in metas {
-                let Some(parent) = m.parents.first() else { continue };
-                for ch in gkl_git::diff::tree_diff_fast(repo, parent, &m.id)? {
+                // merge 提交跳过 churn:与 git log --numstat 默认语义一致
+                //(merge 的变更属于被合并分支自身的提交,避免重复计数)。
+                if m.parents.len() > 1 {
+                    continue;
+                }
+                // 无父(根提交):对空树 diff,与 git numstat 一致全按 Addition 计入。
+                let changes = if m.parents.is_empty() {
+                    gkl_git::diff::tree_diff_fast(repo, "empty", &m.id)?
+                } else {
+                    gkl_git::diff::tree_diff_fast(repo, &m.parents[0], &m.id)?
+                };
+                for ch in changes {
                     let e = cache.entry(ch.path.clone()).or_default();
                     e.commits += 1;
                     match ch.kind {

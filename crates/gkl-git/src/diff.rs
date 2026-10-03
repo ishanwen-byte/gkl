@@ -46,6 +46,18 @@ pub fn tree_diff(repo: &Repo, lhs_rev: &str, rhs_rev: &str) -> anyhow::Result<Ve
     platform.track_rewrites(None);
     platform.for_each_to_obtain_tree(&rhs, |change| {
         use gix::object::tree::diff::change::Event;
+        // 只统计 blob(文件);目录/子模块/符号链接不算文件 churn。
+        let is_file = match &change.event {
+            Event::Addition { entry_mode, .. }
+            | Event::Deletion { entry_mode, .. }
+            | Event::Modification { entry_mode, .. } => entry_mode.is_blob(),
+            _ => false,
+        };
+        if !is_file {
+            return Ok::<gix::object::tree::diff::Action, std::convert::Infallible>(
+                gix::object::tree::diff::Action::Continue,
+            );
+        }
         let path = change.location.to_str_lossy().into_owned();
         match change.event {
             Event::Addition { id, .. } => adds.push((path, id.to_hex().to_string())),
@@ -128,21 +140,37 @@ pub fn find_rename(
         .and_then(|c| c.old_path))
 }
 
-/// 快路径 tree diff:跳过同 oid 配对(churn 场景不需要 Rename 细分,
-/// Addition 的行数足以覆盖;blame 的 rename 走 find_rename)。
+/// 快路径 tree diff:跳过同 oid 配对;lhs_rev 也可以是 "empty" 表示空树(根提交)。
 pub fn tree_diff_fast(
     repo: &Repo,
     lhs_rev: &str,
     rhs_rev: &str,
 ) -> anyhow::Result<Vec<FileChange>> {
-    let lhs = tree_of(repo, lhs_rev)?;
     let rhs = tree_of(repo, rhs_rev)?;
     let mut out = Vec::new();
-    let mut platform = lhs.changes()?;
+    let empty = if lhs_rev == "empty" { Some(empty_tree(repo)?) } else { None };
+    let lhs = if lhs_rev == "empty" { None } else { Some(tree_of(repo, lhs_rev)?) };
+    let mut platform = match (&empty, &lhs) {
+        (Some(e), _) => e.changes()?,
+        (_, Some(l)) => l.changes()?,
+        _ => unreachable!(),
+    };
     platform.track_path();
     platform.track_rewrites(None);
     platform.for_each_to_obtain_tree(&rhs, |change| {
         use gix::object::tree::diff::change::Event;
+        // 只统计 blob(文件);目录/子模块/符号链接不算。
+        let is_file = match &change.event {
+            Event::Addition { entry_mode, .. }
+            | Event::Deletion { entry_mode, .. }
+            | Event::Modification { entry_mode, .. } => entry_mode.is_blob(),
+            _ => false,
+        };
+        if !is_file {
+            return Ok::<gix::object::tree::diff::Action, std::convert::Infallible>(
+                gix::object::tree::diff::Action::Continue,
+            );
+        }
         let path = change.location.to_str_lossy().into_owned();
         match change.event {
             Event::Addition { id, .. } => out.push(FileChange {
@@ -173,6 +201,16 @@ pub fn tree_diff_fast(
         )
     })?;
     Ok(out)
+}
+
+/// 空树对象(git 约定 oid 4b825dc...,每个仓库都有)。
+fn empty_tree<'a>(repo: &'a Repo) -> anyhow::Result<gix::Tree<'a>> {
+    let oid = gix::hash::ObjectId::from_hex(
+        b"4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    )
+    .unwrap();
+    let obj = repo.repo.find_object(oid)?;
+    Ok(obj.try_into_tree()?)
 }
 
 fn tree_of<'a>(repo: &'a Repo, rev: &str) -> anyhow::Result<gix::Tree<'a>> {
