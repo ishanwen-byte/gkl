@@ -140,7 +140,7 @@ pub fn run() -> anyhow::Result<()> {
             } else {
                 println!("commit {}", m.id);
                 println!("Author: {} <{}>", m.author_name, m.author_email);
-                println!("Date:   {} ({:+03}{:02})", date_str(m.author_time), m.author_tz_offset / 60, m.author_tz_offset % 60);
+                println!("Date:   {} ({:+03}:{:02})", date_str(m.author_time), m.author_tz_offset / 60, m.author_tz_offset.abs() % 60);
                 if m.is_merge {
                     println!("Merge: {}", m.parents.join(" "));
                 }

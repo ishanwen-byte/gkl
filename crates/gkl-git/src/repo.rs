@@ -36,14 +36,15 @@ pub struct CommitMeta {
 pub struct OpenError {
     path: PathBuf,
     #[source]
-    source: gix::open::Error,
+    source: gix::discover::Error,
 }
 
 impl Repo {
-    /// 从给定路径打开仓库,支持在子目录里自动向上查找 .git。
+    /// 从给定路径打开仓库。支持三种情况:仓库根、仓库内子目录(向上发现 .git)、
+    /// bare 仓库目录。与 git 命令行行为一致。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, OpenError> {
         let path = path.as_ref().to_path_buf();
-        let repo = gix::open(&path).map_err(|source| OpenError { path, source })?;
+        let repo = gix::discover(&path).map_err(|source| OpenError { path, source })?;
         Ok(Self { repo })
     }
 
