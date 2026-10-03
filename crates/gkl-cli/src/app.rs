@@ -141,6 +141,7 @@ pub fn run() -> anyhow::Result<()> {
                 println!("commit {}", m.id);
                 println!("Author: {} <{}>", m.author_name, m.author_email);
                 println!("Date:   {} ({:+03}:{:02})", date_str(m.author_time), m.author_tz_offset / 60, m.author_tz_offset.abs() % 60);
+                debug_assert!((-720..=840).contains(&m.author_tz_offset), "tz 应为分钟制");
                 if m.is_merge {
                     println!("Merge: {}", m.parents.join(" "));
                 }

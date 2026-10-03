@@ -35,10 +35,19 @@ pub fn answer(repo: &Repo, db: &Db, q: &str) -> anyhow::Result<Option<Answer>> {
 }
 
 /// 从问题里抽取一个疑似文件路径的 token。
+/// 规则:含扩展名形态(点后跟字母数字)即可,有无目录斜杠都行
+/// (README.md 与 a/b.rs 都认);裁剪常见包裹/句尾标点。
 fn extract_path(q: &str) -> Option<String> {
     q.split_whitespace()
-        .map(|t| t.trim_matches(|c: char| c == '<' || c == '>' || c == '"' || c == '`'))
-        .find(|t| t.contains('.') && t.contains('/'))
+        .map(|t| {
+            t.trim_matches(|c: char| {
+                matches!(c, '<' | '>' | '"' | '`' | '?' | '?' | '.' | ',' | ';' | ':' | '。' | ',')
+            })
+        })
+        .find(|t| match t.rfind('.') {
+            Some(i) => t[i + 1..].chars().any(|c| c.is_alphanumeric()),
+            None => false,
+        })
         .map(|s| s.to_string())
 }
 

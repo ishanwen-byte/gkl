@@ -107,7 +107,7 @@ fn meta_of(id: &str, c: &CommitRef) -> CommitMeta {
         author_name: a.name.to_str_lossy().into_owned(),
         author_email: a.email.to_str_lossy().into_owned(),
         author_time: a.time.seconds,
-        author_tz_offset: a.time.offset,
+        author_tz_offset: a.time.offset / 60,
         committer_name: cm.name.to_str_lossy().into_owned(),
         committer_email: cm.email.to_str_lossy().into_owned(),
         committer_time: cm.time.seconds,

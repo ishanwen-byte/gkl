@@ -5,7 +5,8 @@ use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, Tab
 use std::path::Path;
 
 /// 索引结构版本。结构变化时递增,旧库自动重建。
-pub const SCHEMA_VERSION: u64 = 1;
+/// v1: 初始。v2: author_tz_offset 从秒修正为分钟。
+pub const SCHEMA_VERSION: u64 = 2;
 
 const T_META: TableDefinition<&str, &[u8]> = TableDefinition::new("commit_meta");
 const T_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("scan_state");
