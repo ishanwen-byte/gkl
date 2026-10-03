@@ -1,0 +1,18 @@
+[package]
+name = "gkl-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gkl"
+path = "src/main.rs"
+
+[dependencies]
+gkl-git = { path = "../gkl-git" }
+gkl-db = { path = "../gkl-db" }
+gkl-core = { path = "../gkl-core" }
+gkl-agent = { path = "../gkl-agent" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
