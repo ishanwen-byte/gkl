@@ -1,10 +1,18 @@
-//! 轻量 blame:回答"这一行最后一次被谁改的"。
+//! blame:回答"这一行最后被谁改的"。
 //!
-//! 不是完整 git blame(不做跨 rename 追溯、不处理合并启发式),
-//! 而是历史二分 + 行内容匹配,足够回答考古问题:
-//! "HEAD 上文件 F 的第 N 行,最早出现在哪个提交"。
+//! 算法(逐提交回溯 + 行映射):
+//! 1. 从 HEAD 出发,目标 (path, line)。
+//! 2. 对每个提交 C 与其父 P:
+//!    - 单父:diff P->C 的 blob,similar 把行号映射回 P;行未变则继续,变了则 C 是答案。
+//!    - merge:逐父尝试,P1 行未变则走 P1;否则试 P2(穿透到侧支,git 默认语义)。
+//!    - 父无该路径:diff.rs 的同 oid 配对识别纯改名,跟随旧路径继续。
+//! 3. 到根提交即答案(该行自初始就存在)。
+//!
+//! 已知偏差:rename 只识别同 oid 搬家(纯改名/git mv);
+//! 改名同时改内容会断链(git -M 相似度匹配,README 已记录)。
 
 use crate::repo::Repo;
+use similar::{DiffOp, TextDiff};
 
 /// 一行的 blame 结果。
 #[derive(Debug, Clone)]
@@ -13,50 +21,111 @@ pub struct LineBlame {
     pub commit: String,
     /// 该行在命中提交时的行号(1-based)。
     pub line_no: usize,
+    /// blame 跟随过的路径链(含起点);rename 时 >1 项。
+    pub path_chain: Vec<String>,
 }
 
 /// 找 HEAD 文件第 line_no(1-based)行最后修改它的提交。
-///
-/// 沿第一父链回溯:行内容相同则继续向前,内容变化(或文件消失)的前一个提交即答案。
-/// 简单可靠,大仓库下行数少时性能足够;后续可换 imit::blame 优化。
 pub fn blame_line(repo: &Repo, path: &str, line_no: usize) -> anyhow::Result<Option<LineBlame>> {
-    let head = repo.head_id()?;
-    let head_blob = repo.blob_at(&head, path)?;
-    let Some(blob) = head_blob else {
-        anyhow::bail!("HEAD 上不存在文件: {}", path);
+    blame_from(repo, "HEAD", path, line_no, 0)
+}
+
+/// 从任意 rev 开始 blame。
+pub fn blame_from(
+    repo: &Repo,
+    rev: &str,
+    path: &str,
+    line_no: usize,
+    max_hops: usize,
+) -> anyhow::Result<Option<LineBlame>> {
+    let head = repo.rev(rev)?;
+    let Some(blob) = repo.blob_at(&head, path)? else {
+        anyhow::bail!("{} 上不存在文件: {}", rev, path);
     };
-    let lines: Vec<&[u8]> = split_lines(&blob);
+    let lines = split_lines(&blob);
     if line_no == 0 || line_no > lines.len() {
         anyhow::bail!("行号越界: 文件共 {} 行,请求 {}", lines.len(), line_no);
     }
-    let target = lines[line_no - 1].to_vec();
 
+    let mut cur_path = path.to_string();
+    let mut cur_line = line_no;
+    let mut path_chain = vec![cur_path.clone()];
     let mut cur = repo.commit_meta(&head)?;
-    loop {
-        let Some(parent) = cur.parents.first().cloned() else {
-            // 到根提交:该行自仓库初始就存在。
-            return Ok(Some(LineBlame { commit: cur.id.clone(), line_no }));
+
+    for hop in 0.. {
+        if max_hops > 0 && hop >= max_hops {
+            break;
+        }
+        let Some(next) = step_back(repo, &cur, &cur_path, cur_line, &mut path_chain)? else {
+            break;
         };
-        let parent_blob = repo.blob_at(&parent, path)?;
-        match parent_blob {
+        let (pid, ppath, pline) = next;
+        cur = repo.commit_meta(&pid)?;
+        cur_path = ppath;
+        cur_line = pline;
+    }
+    Ok(Some(LineBlame { commit: cur.id.clone(), line_no: cur_line, path_chain }))
+}
+
+/// 单步回溯。Some((父, 父路径, 父行号)) = 行未变可继续;None = 当前提交是答案。
+fn step_back(
+    repo: &Repo,
+    cur: &crate::repo::CommitMeta,
+    path: &str,
+    line: usize,
+    path_chain: &mut Vec<String>,
+) -> anyhow::Result<Option<(String, String, usize)>> {
+    let Some(cur_blob) = repo.blob_at(&cur.id, path)? else {
+        anyhow::bail!("提交 {} 缺文件 {}", &cur.id[..7], path);
+    };
+
+    for (i, parent_id) in cur.parents.iter().enumerate() {
+        match repo.blob_at(parent_id, path)? {
             Some(pb) => {
-                let plines = split_lines(&pb);
-                if plines.get(line_no - 1) == Some(&target.as_slice()) {
-                    // 行未变,继续回溯。
-                    cur = repo.commit_meta(&parent)?;
-                } else {
-                    return Ok(Some(LineBlame { commit: cur.id.clone(), line_no }));
+                if let Some(parent_line) = map_line(&pb, &cur_blob, line) {
+                    return Ok(Some((parent_id.clone(), path.to_string(), parent_line)));
+                }
+                // 行变了;还有父可试则继续。
+                if i == cur.parents.len() - 1 {
+                    return Ok(None);
                 }
             }
             None => {
-                // 文件在父提交不存在:当前提交引入了它。
-                return Ok(Some(LineBlame { commit: cur.id.clone(), line_no }));
+                // 父无该路径:同 oid 纯改名跟随。
+                if let Some(old_path) =
+                    crate::diff::find_rename(repo, parent_id, &cur.id, path)?
+                {
+                    path_chain.push(old_path.clone());
+                    // 纯改名行号不变。
+                    return Ok(Some((parent_id.clone(), old_path, line)));
+                }
+                if i == cur.parents.len() - 1 {
+                    return Ok(None);
+                }
             }
         }
     }
+    Ok(None)
 }
 
-/// 按 \n 切分,保留每行内容(不含换行符)。\r 保留以便 CRLF 比较一致。
+/// 把 cur_blob 的第 line(1-based)行映射回 parent_blob 的行号。
+/// 返回 Some(parent_line) 表示该行在 Equal 段(未变);
+/// None 表示行处于 Insert/Delete/Replace 段(本提交改了它)。
+fn map_line(parent_blob: &[u8], cur_blob: &[u8], line: usize) -> Option<usize> {
+    let diff = TextDiff::from_lines(parent_blob, cur_blob);
+    for op in diff.ops() {
+        if let DiffOp::Equal { old_index, new_index, len } = op {
+            // new 段覆盖 0-based [new_index, new_index+len);目标行 line-1 落在内则映射。
+            let n0 = line - 1;
+            if n0 >= *new_index && n0 < *new_index + len {
+                return Some(old_index + (n0 - new_index) + 1);
+            }
+        }
+    }
+    None
+}
+
+/// 按 \n 切分(保留 \r 以便 CRLF 一致比较)。
 fn split_lines(b: &[u8]) -> Vec<&[u8]> {
     b.split(|&c| c == b'\n').collect()
 }
@@ -68,8 +137,27 @@ mod tests {
     #[test]
     fn self_blame() {
         let r = Repo::open(env!("CARGO_MANIFEST_DIR")).unwrap();
-        // 本文件第 1 行是文档注释,blame 必须命中一个真实提交。
         let hit = blame_line(&r, "crates/gkl-git/src/blame.rs", 1).unwrap().unwrap();
         assert_eq!(hit.commit.len(), 40);
+    }
+
+    #[test]
+    fn map_line_identity() {
+        // 全等文件:行号原样映射。
+        assert_eq!(map_line(b"a\nb\nc\n", b"a\nb\nc\n", 2), Some(2));
+    }
+
+    #[test]
+    fn map_line_insert_before() {
+        // 父:a b c;子:在头部插入 x -> a b c。子行 2(a)应映射回父行 1。
+        assert_eq!(map_line(b"a\nb\nc\n", b"x\na\nb\nc\n", 2), Some(1));
+        // 子行 1(x)是新增 -> None。
+        assert_eq!(map_line(b"a\nb\nc\n", b"x\na\nb\nc\n", 1), None);
+    }
+
+    #[test]
+    fn map_line_delete_before() {
+        // 父:x a b;子删掉 x -> a b。子行 1(a)映射回父行 2。
+        assert_eq!(map_line(b"x\na\nb\n", b"a\nb\n", 1), Some(2));
     }
 }

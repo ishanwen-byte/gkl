@@ -6,5 +6,6 @@
 pub mod repo;
 pub mod walk;
 pub mod blame;
+pub mod diff;
 
 pub use repo::Repo;

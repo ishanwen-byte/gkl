@@ -18,12 +18,14 @@ cargo build --release
 ## 快速开始
 
 ```bash
-gkl scan                 # 建立索引(增量;--force 全量重建)
+gkl scan                 # 建立主线索引(增量;--force 全量重建)
+gkl scan --all           # 全历史索引(全部 refs,含侧链;顺带建 churn)
 gkl log --limit 20       # 提交日志(支持 --author/--grep 过滤)
-gkl authors              # 作者统计
+gkl authors              # 作者统计(mailmap 归一)
 gkl activity             # 月度活动柱状图
+gkl churn                # 文件级热点(按变更次数;--by-lines 按行数)
 gkl show <rev>           # 提交详情 + 深链接
-gkl blame <path> <line>  # 这行代码最后被谁改的(轻量,第一父链回溯)
+gkl blame <path> <line>  # 这行代码最后被谁改的(穿透 merge + rename 跟随)
 gkl ask "热点在哪"        # AI 问答
 ```
 
@@ -75,11 +77,10 @@ crates/
 
 ## 已知限制(路线图)
 
-- blame 是第一父链回溯启发式,不做跨 rename/合并归因;计划接 `gix::trace::blame` 或自实现 Myers diff
-- 索引只覆盖 first-parent 主线,侧链提交待扩展
-- 无文件级 churn 统计(需要 diff 遍历)
-- 无 .mailmap 身份合并
-- partial clone 下 blob 缺失时直接报错,未做优雅降级
+- blame 的 rename 只识别同 oid 搬家(纯改名/git mv);改名同时改内容会断链(git -M 相似度匹配)
+- churn 行数只统计 Addition/Modification,Deletion 不计行数
+- 全历史首次扫描(约万提交)单线程约半小时;churn 重建每次全量重算,未做增量
+- LLM 问答依赖真实 API key;partial clone 缺 blob 时报错并提示 `git fetch --refetch --no-filter`
 
 ## 许可
 

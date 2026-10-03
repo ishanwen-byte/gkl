@@ -9,3 +9,4 @@ gix = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+similar = { workspace = true }

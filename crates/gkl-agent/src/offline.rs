@@ -23,7 +23,7 @@ pub fn answer(repo: &Repo, db: &Db, q: &str) -> anyhow::Result<Option<Answer>> {
 
     // 模式:热点/churn
     if q_lower.contains("热点") || q_lower.contains("churn") || q_lower.contains("最多改动") {
-        return Ok(Some(hotspots(db)?));
+        return Ok(Some(hotspots(repo, db)?));
     }
 
     // 模式:作者排行
@@ -41,7 +41,7 @@ fn extract_path(q: &str) -> Option<String> {
     q.split_whitespace()
         .map(|t| {
             t.trim_matches(|c: char| {
-                matches!(c, '<' | '>' | '"' | '`' | '?' | '?' | '.' | ',' | ';' | ':' | '。' | ',')
+                ['<', '>', '"', '`', '?', '.', ',', ';', ':', '。', '，'].contains(&c)
             })
         })
         .find(|t| match t.rfind('.') {
@@ -75,13 +75,25 @@ fn who_wrote(repo: &Repo, db: &Db, path: &str) -> anyhow::Result<Option<Answer>>
     }))
 }
 
-fn hotspots(db: &Db) -> anyhow::Result<Answer> {
-    let authors = gkl_core::query::authors(db, 3)?;
-    let mut text = String::from("提交数最多的作者(代理热点指标,文件级 churn 见后续版本):\n");
-    for a in authors {
-        text.push_str(&format!("  {} <{}>: {} 次提交\n", a.name, a.email, a.commits));
+fn hotspots(repo: &Repo, db: &Db) -> anyhow::Result<Answer> {
+    if db.has_churn()? {
+        let list = db.all_churn()?;
+        let mut text = String::from("churn 热点(按变更次数,前 5):\n");
+        let mut evidence = Vec::new();
+        for (p, e) in list.iter().take(5) {
+            text.push_str(&format!("  {}c +{} -{} {}\n", e.commits, e.added, e.deleted, p));
+            evidence.push(DeepLinkTarget::Blame { path: p.clone(), line: Some(1) }.to_link());
+        }
+        Ok(Answer { text, evidence, engine: Engine::Heuristic })
+    } else {
+        let _ = repo;
+        let authors = gkl_core::query::authors(db, 3)?;
+        let mut text = String::from("churn 索引为空(运行 gkl scan --all 可得文件级热点)。当前提交数最多的作者:\n");
+        for a in authors {
+            text.push_str(&format!("  {} <{}>: {} 次提交\n", a.name, a.email, a.commits));
+        }
+        Ok(Answer { text, evidence: vec![], engine: Engine::Heuristic })
     }
-    Ok(Answer { text, evidence: vec![], engine: Engine::Heuristic })
 }
 
 fn top_authors(db: &Db) -> anyhow::Result<Answer> {

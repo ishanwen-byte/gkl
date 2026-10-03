@@ -16,6 +16,10 @@ pub struct CommitMeta {
     pub id: String,
     pub author_name: String,
     pub author_email: String,
+    /// mailmap 归一后的作者名(无 mailmap 时与 author_name 相同)。
+    pub author_name_mapped: String,
+    /// mailmap 归一后的作者邮箱。
+    pub author_email_mapped: String,
     /// Unix 秒(作者时区无关的绝对时间)。
     pub author_time: i64,
     /// 作者时区偏移分钟,如 480 表示 UTC+8。
@@ -48,6 +52,11 @@ impl Repo {
         Ok(Self { repo })
     }
 
+    /// 仓库的 mailmap 快照(.mailmap 文件解析结果)。
+    pub fn mailmap(&self) -> gix::mailmap::Snapshot {
+        self.repo.open_mailmap()
+    }
+
     /// 仓库工作目录(仓库为 bare 时返回 None)。
     pub fn workdir(&self) -> Option<std::path::PathBuf> {
         self.repo.work_dir().map(|p: &std::path::Path| p.to_path_buf())
@@ -77,10 +86,62 @@ impl Repo {
         let commit = obj.try_into_commit()?;
         let cid = commit.id();
         let c: CommitRef = commit.decode()?;
-        Ok(meta_of(&cid.to_hex().to_string(), &c))
+        Ok(self.meta_of(&cid.to_hex().to_string(), &c))
     }
 
-    /// 读取某提交下指定路径的 blob 内容。文件不存在或不是 blob 返回 None。
+    /// CommitRef -> CommitMeta,应用 mailmap 归一。
+    fn meta_of(&self, id: &str, c: &CommitRef) -> CommitMeta {
+        let a = &c.author;
+        let cm = &c.committer;
+        let parent_count = c.parents.iter().count();
+        let mailmap = self.mailmap();
+        let (an, ae) = resolve_signature(&mailmap, &a.name.to_str_lossy(), &a.email.to_str_lossy());
+        CommitMeta {
+            id: id.to_string(),
+            author_name: a.name.to_str_lossy().into_owned(),
+            author_email: a.email.to_str_lossy().into_owned(),
+            author_name_mapped: an,
+            author_email_mapped: ae,
+            author_time: a.time.seconds,
+            author_tz_offset: a.time.offset / 60,
+            committer_name: cm.name.to_str_lossy().into_owned(),
+            committer_email: cm.email.to_str_lossy().into_owned(),
+            committer_time: cm.time.seconds,
+            message_subject: c
+                .message()
+                .summary()
+                .to_str_lossy()
+                .into_owned(),
+            parents: c
+                .parents
+                .iter()
+                .map(|p| p.to_str_lossy().to_lowercase())
+                .collect(),
+            is_merge: parent_count > 1,
+        }
+    }
+
+    /// 按 hex oid 读对象原始字节(仅 blob 有意义)。
+    pub fn blob_by_oid(&self, hex: &str) -> Option<Vec<u8>> {
+        let oid = gix::hash::ObjectId::from_hex(hex.as_bytes()).ok()?;
+        self.repo.find_object(oid).ok().map(|o| o.data.to_vec())
+    }
+
+    /// 读取某提交下指定路径的 blob oid(不读内容;树存在但 blob 缺失时仍返回 oid,
+    /// 这是 partial clone 的正常状态)。
+    pub fn blob_oid_at(&self, commit_id: &str, path: &str) -> anyhow::Result<Option<String>> {
+        let oid = self.repo.rev_parse_single(commit_id.as_bytes())?.detach();
+        let commit = self.repo.find_object(oid)?.try_into_commit()?;
+        let tree = commit.tree()?;
+        let mut buf = Vec::new();
+        let entry = tree.lookup_entry_by_path(std::path::Path::new(path), &mut buf)?;
+        Ok(entry
+            .filter(|e| e.mode().is_blob())
+            .map(|e| e.oid().to_hex().to_string()))
+    }
+
+    /// 读取某提交下指定路径的 blob 内容。文件不存在或不是 blob 返回 None;
+    /// partial clone 缺 blob 时返回友好错误(提示补拉取)而非原始 IO 错误。
     pub fn blob_at(&self, commit_id: &str, path: &str) -> anyhow::Result<Option<Vec<u8>>> {
         let oid = self.repo.rev_parse_single(commit_id.as_bytes())?.detach();
         let commit = self.repo.find_object(oid)?.try_into_commit()?;
@@ -89,40 +150,42 @@ impl Repo {
         let entry = tree.lookup_entry_by_path(std::path::Path::new(path), &mut buf)?;
         match entry {
             Some(e) if e.mode().is_blob() => {
-                let data = self.repo.find_object(e.oid())?.data.to_vec();
-                Ok(Some(data))
+                match self.repo.find_object(e.oid()) {
+                    Ok(obj) => Ok(Some(obj.data.to_vec())),
+                    Err(err) => {
+                        // partial clone(--filter=blob=none)下常见:本地无 blob 内容。
+                        anyhow::bail!(
+                            "blob {} 未在本地(疑似 partial clone)。\n\
+                             解决: git fetch --refetch --no-filter 或重新完整 clone;\n\
+                             或对该文件跳过内容级分析: {}",
+                            e.oid().to_hex(),
+                            err
+                        );
+                    }
+                }
             }
             _ => Ok(None),
         }
     }
 }
 
-/// CommitRef -> CommitMeta。
-fn meta_of(id: &str, c: &CommitRef) -> CommitMeta {
-    let a = &c.author;
-    let cm = &c.committer;
-    let parent_count = c.parents.iter().count();
-    CommitMeta {
-        id: id.to_string(),
-        author_name: a.name.to_str_lossy().into_owned(),
-        author_email: a.email.to_str_lossy().into_owned(),
-        author_time: a.time.seconds,
-        author_tz_offset: a.time.offset / 60,
-        committer_name: cm.name.to_str_lossy().into_owned(),
-        committer_email: cm.email.to_str_lossy().into_owned(),
-        committer_time: cm.time.seconds,
-        message_subject: c
-            .message()
-            .summary()
-            .to_str_lossy()
-            .into_owned(),
-        parents: c
-            .parents
-            .iter()
-            .map(|p| p.to_str_lossy().to_lowercase())
-            .collect(),
-        is_merge: parent_count > 1,
-    }
+/// 用 mailmap 快照归一签名;无匹配时返回原值。
+fn resolve_signature(
+    mailmap: &gix::mailmap::Snapshot,
+    name: &str,
+    email: &str,
+) -> (String, String) {
+    use gix::bstr::ByteSlice;
+    let sig = gix::actor::SignatureRef {
+        name: name.as_bytes().as_bstr(),
+        email: email.as_bytes().as_bstr(),
+        time: gix::date::Time::new(0, 0),
+    };
+    let resolved = mailmap.resolve(sig);
+    (
+        resolved.name.to_str_lossy().into_owned(),
+        resolved.email.to_str_lossy().into_owned(),
+    )
 }
 
 #[cfg(test)]

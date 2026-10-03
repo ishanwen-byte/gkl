@@ -8,7 +8,7 @@ use std::collections::HashMap;
 #[derive(Debug, Default, Clone)]
 pub struct LogFilter {
     pub author: Option<String>,
-    /// 子串匹配,大小写不敏感。
+    /// 子串匹配,大小写不敏感(同时匹配原始与 mailmap 归一身份)。
     pub grep: Option<String>,
     /// author_time 下界(Unix 秒)。
     pub since: Option<i64>,
@@ -25,6 +25,8 @@ pub fn log(db: &Db, f: &LogFilter) -> anyhow::Result<Vec<CommitMeta>> {
         all.retain(|m| {
             m.author_name.to_lowercase().contains(&a)
                 || m.author_email.to_lowercase().contains(&a)
+                || m.author_name_mapped.to_lowercase().contains(&a)
+                || m.author_email_mapped.to_lowercase().contains(&a)
         });
     }
     if let Some(g) = &f.grep {
@@ -53,15 +55,16 @@ pub struct AuthorStat {
     pub last: i64,
 }
 
-/// 作者维度统计,按提交数降序。
+/// 作者维度统计,按提交数降序。优先 mailmap 归一身份。
 pub fn authors(db: &Db, limit: usize) -> anyhow::Result<Vec<AuthorStat>> {
     let all = db.all_commits()?;
     let mut by: HashMap<(String, String), AuthorStat> = HashMap::new();
     for m in all {
-        let key = (m.author_name.clone(), m.author_email.clone());
+        // 归一身份优先;无 mailmap 时与原始一致。
+        let key = (m.author_name_mapped.clone(), m.author_email_mapped.clone());
         let e = by.entry(key).or_insert(AuthorStat {
-            name: m.author_name.clone(),
-            email: m.author_email.clone(),
+            name: m.author_name_mapped.clone(),
+            email: m.author_email_mapped.clone(),
             commits: 0,
             first: m.author_time,
             last: m.author_time,

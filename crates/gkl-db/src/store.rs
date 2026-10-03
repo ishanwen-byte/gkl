@@ -6,10 +6,23 @@ use std::path::Path;
 
 /// 索引结构版本。结构变化时递增,旧库自动重建。
 /// v1: 初始。v2: author_tz_offset 从秒修正为分钟。
-pub const SCHEMA_VERSION: u64 = 2;
+/// v3: mailmap 归一字段 + churn 表 + 全历史模式。
+pub const SCHEMA_VERSION: u64 = 3;
 
 const T_META: TableDefinition<&str, &[u8]> = TableDefinition::new("commit_meta");
 const T_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("scan_state");
+const T_CHURN: TableDefinition<&str, &[u8]> = TableDefinition::new("file_churn");
+
+/// 单文件 churn 累计。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ChurnEntry {
+    /// 变更次数(含增/删/改/改名)。
+    pub commits: u64,
+    /// 累计新增行。
+    pub added: u64,
+    /// 累计删除行。
+    pub deleted: u64,
+}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ScanState {
@@ -39,6 +52,7 @@ impl Db {
         {
             let _t = txn.open_table(T_META)?;
             let _t = txn.open_table(T_STATE)?;
+            let _t = txn.open_table(T_CHURN)?;
         }
         txn.commit()?;
         Ok(Self { db, path })
@@ -142,16 +156,153 @@ impl Db {
         }
     }
 
+    /// 增量写入:已存在的 key 跳过(避免覆盖旧 schema 数据/重复计数)。
+    pub fn write_commits_skip_existing(&self, metas: &[CommitMeta], tip: &str) -> anyhow::Result<u64> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut t = txn.open_table(T_META)?;
+            for m in metas {
+                let key: &str = &m.id;
+                if t.get(key)?.is_some() {
+                    continue;
+                }
+                let val = serde_json::to_vec(m)?;
+                t.insert(key, val.as_slice())?;
+            }
+            let mut s = txn.open_table(T_STATE)?;
+            let state = ScanState {
+                schema_version: SCHEMA_VERSION,
+                tip: tip.to_string(),
+                indexed: t.len()?,
+            };
+            let encoded = serde_json::to_vec(&state)?;
+            s.insert("state", encoded.as_slice())?;
+        }
+        txn.commit()?;
+        self.len()
+    }
+
+    /// 全量重建 churn:清空后累计每个提交(对第一父)的文件级变更。
+    /// 性能:单事务批量写;blob 用 oid 直读(避免逐文件 rev-parse)。
+    pub fn rebuild_churn(&self, repo: &gkl_git::Repo, metas: &[CommitMeta]) -> anyhow::Result<()> {
+        self.churn_inner(repo, metas, true)
+    }
+
+    /// 增量累计 churn(只传入新提交区间)。
+    pub fn add_churn(&self, repo: &gkl_git::Repo, metas: &[CommitMeta]) -> anyhow::Result<()> {
+        self.churn_inner(repo, metas, false)
+    }
+
+    fn churn_inner(
+        &self,
+        repo: &gkl_git::Repo,
+        metas: &[CommitMeta],
+        clear_first: bool,
+    ) -> anyhow::Result<()> {
+        let txn = self.db.begin_write()?;
+        {
+            if clear_first {
+                txn.delete_table(T_CHURN)?;
+            }
+            let mut t = txn.open_table(T_CHURN)?;
+            let mut cache: std::collections::HashMap<String, ChurnEntry> = std::collections::HashMap::new();
+            for m in metas {
+                let Some(parent) = m.parents.first() else { continue };
+                for ch in gkl_git::diff::tree_diff_fast(repo, parent, &m.id)? {
+                    let e = cache.entry(ch.path.clone()).or_default();
+                    e.commits += 1;
+                    match ch.kind {
+                        gkl_git::diff::ChangeKind::Addition => {
+                            if let Some(hex) = &ch.new_oid {
+                                if let Some(blob) = repo.blob_by_oid(hex) {
+                                    e.added += count_lines(&blob);
+                                }
+                            }
+                        }
+                        gkl_git::diff::ChangeKind::Modification => {
+                            if let (Some(o), Some(n)) = (&ch.old_oid, &ch.new_oid) {
+                                if let (Some(ob), Some(nb)) =
+                                    (repo.blob_by_oid(o), repo.blob_by_oid(n))
+                                {
+                                    let (a, d) = line_delta_raw(&ob, &nb);
+                                    e.added += a;
+                                    e.deleted += d;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            for (path, e) in cache {
+                let val = serde_json::to_vec(&e)?;
+                t.insert(path.as_str(), val.as_slice())?;
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// churn 表非空?
+    pub fn has_churn(&self) -> anyhow::Result<bool> {
+        let txn = self.db.begin_read()?;
+        let t = txn.open_table(T_CHURN)?;
+        Ok(t.len()? > 0)
+    }
+
+    /// 读全部 churn,按变更次数降序。
+    pub fn all_churn(&self) -> anyhow::Result<Vec<(String, ChurnEntry)>> {
+        let txn = self.db.begin_read()?;
+        let t = txn.open_table(T_CHURN)?;
+        let mut out = Vec::new();
+        for row in t.iter()? {
+            let (k, v) = row?;
+            out.push((k.value().to_string(), serde_json::from_slice::<ChurnEntry>(v.value())?));
+        }
+        out.sort_by(|a, b| b.1.commits.cmp(&a.1.commits));
+        Ok(out)
+    }
+
     /// 清空全部索引(重建用)。commit 表与扫描状态一并清零。
     pub fn reset(&self) -> anyhow::Result<()> {
         let txn = self.db.begin_write()?;
         {
             txn.delete_table(T_META)?;
             txn.delete_table(T_STATE)?;
+            txn.delete_table(T_CHURN)?;
             let _t = txn.open_table(T_META)?;
             let _t = txn.open_table(T_STATE)?;
+            let _t = txn.open_table(T_CHURN)?;
         }
         txn.commit()?;
         Ok(())
     }
+}
+
+/// 行数统计(\n 计数,末行无换行也计 1)。
+fn count_lines(b: &[u8]) -> u64 {
+    if b.is_empty() {
+        return 0;
+    }
+    (b.iter().filter(|&&c| c == b'\n').count() as u64)
+        + if b.last() != Some(&b'\n') { 1 } else { 0 }
+}
+
+/// 两版内容的行级 (added, deleted)。similar 行 diff 的 Insert/Delete/Replace 计数。
+fn line_delta_raw(old: &[u8], new: &[u8]) -> (u64, u64) {
+    use similar::{DiffOp, TextDiff};
+    let diff = TextDiff::from_lines(old, new);
+    let (mut a, mut d) = (0u64, 0u64);
+    for op in diff.ops() {
+        match op {
+            DiffOp::Insert { new_len, .. } => a += *new_len as u64,
+            DiffOp::Delete { old_len, .. } => d += *old_len as u64,
+            DiffOp::Replace { old_len, new_len, .. } => {
+                d += *old_len as u64;
+                a += *new_len as u64;
+            }
+            DiffOp::Equal { .. } => {}
+        }
+    }
+    (a, d)
 }

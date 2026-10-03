@@ -12,6 +12,7 @@ pub enum WalkMode {
 }
 
 /// 从 start 出发按模式遍历,遇到 end(不含)停止。
+/// All 模式下 start 为 "--all" 时从全部 refs 出发(git log --all 语义)。
 pub fn walk(
     repo: &Repo,
     start: &str,
@@ -20,13 +21,40 @@ pub fn walk(
     limit: usize,
 ) -> anyhow::Result<Vec<CommitMeta>> {
     let mut out = Vec::new();
-    let start_oid = repo.repo.rev_parse_single(start.as_bytes())?.detach();
     let stop_oid = match end {
         Some(e) => Some(repo.repo.rev_parse_single(e.as_bytes())?.detach()),
         None => None,
     };
 
-    let mut platform = repo.repo.rev_walk([start_oid]);
+    let mut platform = if start == "--all" {
+        // 全部 refs 的 tips(本地/远程分支、标签,peel 到提交)。
+        let mut tips: Vec<gix::hash::ObjectId> = Vec::new();
+        match repo.repo.references() {
+            Ok(platform) => match platform.all() {
+                Ok(iter) => {
+                    for rref in iter.flatten() {
+                        // 跳过 symbolic ref(如 HEAD):id() 会 panic;
+                        // 它指向的目标分支本身会被枚举到。
+                        if rref.target().try_id().is_none() {
+                            continue;
+                        }
+                        if let Ok(obj) = rref.id().object() {
+                            let oid = obj.id;
+                            if matches!(obj.try_into_commit(), Ok(_)) {
+                                tips.push(oid);
+                            }
+                        }
+                    }
+                }
+                Err(_) => {}
+            },
+            Err(_) => {}
+        }
+        repo.repo.rev_walk(tips)
+    } else {
+        let start_oid = repo.repo.rev_parse_single(start.as_bytes())?.detach();
+        repo.repo.rev_walk([start_oid])
+    };
     if matches!(mode, WalkMode::FirstParent) {
         platform = platform.first_parent_only();
     }

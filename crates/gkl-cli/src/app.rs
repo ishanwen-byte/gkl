@@ -30,6 +30,9 @@ enum Cmd {
         /// 忽略增量,全量重建。
         #[arg(long)]
         force: bool,
+        /// 全历史拓扑(含侧链;顺带重建文件 churn 统计)。
+        #[arg(long)]
+        all: bool,
     },
     /// 提交日志(走索引,支持过滤)。
     Log {
@@ -39,6 +42,14 @@ enum Cmd {
         grep: Option<String>,
         #[arg(long, default_value = "30")]
         limit: usize,
+    },
+    /// 文件级 churn 热点(需 scan --all 过)。
+    Churn {
+        #[arg(long, default_value = "20")]
+        limit: usize,
+        /// 只看新增+删除行数(而不是变更次数)。
+        #[arg(long)]
+        by_lines: bool,
     },
     /// 作者统计。
     Authors {
@@ -87,12 +98,13 @@ pub fn run() -> anyhow::Result<()> {
     let db = Db::open(&db_path).context("打开索引数据库")?;
 
     match cli.cmd {
-        Cmd::Scan { force } => {
-            let r = gkl_db::scan::scan(&repo, &db, force)?;
+        Cmd::Scan { force, all } => {
+            let r = gkl_db::scan::scan(&repo, &db, force, all)?;
             if cli.json {
-                println!("{}", serde_json::json!({"new": r.new_commits, "total": r.total, "tip": r.tip}));
+                println!("{}", serde_json::json!({"new": r.new_commits, "total": r.total, "tip": r.tip, "all": r.all_history}));
             } else {
-                println!("已索引 {} 个提交(新增 {},tip {})", r.total, r.new_commits, &r.tip[..7]);
+                let mode = if r.all_history { "全历史" } else { "主线" };
+                println!("已索引 {} 个提交({}模式,新增 {},tip {})", r.total, mode, r.new_commits, &r.tip[..7]);
             }
         }
         Cmd::Log { author, grep, limit } => {
@@ -106,6 +118,29 @@ pub fn run() -> anyhow::Result<()> {
             } else {
                 for m in list {
                     println!("{} {} {:<12} {}", &m.id[..7], date_str(m.author_time), m.author_name, m.message_subject);
+                }
+            }
+        }
+        Cmd::Churn { limit, by_lines } => {
+            if !db.has_churn()? {
+                anyhow::bail!("churn 索引为空,先运行: gkl scan --all");
+            }
+            let mut list = db.all_churn()?;
+            if by_lines {
+                list.sort_by(|a, b| (b.1.added + b.1.deleted).cmp(&(a.1.added + a.1.deleted)));
+            }
+            list.truncate(limit);
+            if cli.json {
+                let out: Vec<serde_json::Value> = list
+                    .iter()
+                    .map(|(p, e)| {
+                        serde_json::json!({"path": p, "commits": e.commits, "added": e.added, "deleted": e.deleted})
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                for (p, e) in list {
+                    println!("{:>6}c +{:<6} -{:<6} {}", e.commits, e.added, e.deleted, p);
                 }
             }
         }
@@ -156,15 +191,22 @@ pub fn run() -> anyhow::Result<()> {
             match hit {
                 Some(h) => {
                     let m = repo.commit_meta(&h.commit)?;
+                    let chain = if h.path_chain.len() > 1 {
+                        format!("\n路径链: {}", h.path_chain.join(" <- "))
+                    } else {
+                        String::new()
+                    };
                     if cli.json {
                         println!("{}", serde_json::json!({
                             "path": path, "line": line,
                             "commit": h.commit, "author": m.author_name,
                             "date": date_str(m.author_time), "subject": m.message_subject,
+                            "path_chain": h.path_chain,
                             "link": DeepLinkTarget::Blame { path: path.clone(), line: Some(line as u32) }.to_link(),
                         }));
                     } else {
                         println!("{} {} ({} {})", &h.commit[..7], m.message_subject, m.author_name, date_str(m.author_time));
+                        println!("{}", chain.trim_end_matches('\n'));
                         println!("深链接: {}", DeepLinkTarget::Blame { path: path.clone(), line: Some(line as u32) }.to_link());
                     }
                 }
