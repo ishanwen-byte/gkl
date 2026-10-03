@@ -27,7 +27,8 @@ pub fn walk(
     };
 
     let mut platform = if start == "--all" {
-        // 全部 refs 的 tips(本地/远程分支、标签,peel 到提交)。
+        // 全部 refs 的 tips(本地/远程分支、标签)。annotated tag 要 peel 到提交
+        // (与 git rev-list --all 一致),否则 tag 对象指向的提交会被漏掉。
         let mut tips: Vec<gix::hash::ObjectId> = Vec::new();
         match repo.repo.references() {
             Ok(platform) => match platform.all() {
@@ -38,10 +39,9 @@ pub fn walk(
                         if rref.target().try_id().is_none() {
                             continue;
                         }
-                        if let Ok(obj) = rref.id().object() {
-                            let oid = obj.id;
-                            if matches!(obj.try_into_commit(), Ok(_)) {
-                                tips.push(oid);
+                        if let Some(oid) = rref.target().try_id() {
+                            if let Some(c) = peel_to_commit(repo, oid.to_owned()) {
+                                tips.push(c);
                             }
                         }
                     }
@@ -70,4 +70,30 @@ pub fn walk(
         }
     }
     Ok(out)
+}
+
+/// 递归 peel:oid 可能是 commit(直接返回)或 tag 对象(取 target 再 peel,
+/// 支持嵌套 tag)。不是二者则 None。
+fn peel_to_commit(repo: &Repo, oid: gix::hash::ObjectId) -> Option<gix::hash::ObjectId> {
+    let mut cur = oid;
+    for _ in 0..10 {
+        // 防御嵌套 tag 死循环。
+        let obj = repo.repo.find_object(cur).ok()?;
+        match obj.try_into_tag() {
+            Ok(t) => match t.target_id() {
+                Ok(id) => cur = id.detach(),
+                Err(_) => return None,
+            },
+            Err(_not_tag) => {
+                // 非 tag:是 commit 就返回,否则(树/blob)None。
+                let is_commit = repo
+                    .repo
+                    .find_header(cur)
+                    .map(|h| h.kind() == gix::object::Kind::Commit)
+                    .unwrap_or(false);
+                return if is_commit { Some(cur) } else { None };
+            }
+        }
+    }
+    None
 }
