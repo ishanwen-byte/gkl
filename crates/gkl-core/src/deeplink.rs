@@ -85,9 +85,14 @@ pub fn parse(input: &str) -> Result<DeepLinkTarget, DeepLinkError> {
     match kind {
         "commit" => {
             if arg.len() != 40 || !arg.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(DeepLinkError(format!("commit id 必须是 40 位 hex: {}", arg)));
+                return Err(DeepLinkError(format!(
+                    "commit id 必须是 40 位 hex: {}",
+                    arg
+                )));
             }
-            Ok(DeepLinkTarget::Commit { id: arg.to_lowercase() })
+            Ok(DeepLinkTarget::Commit {
+                id: arg.to_lowercase(),
+            })
         }
         "file" => Ok(DeepLinkTarget::File {
             path: percent_decode(arg)?,
@@ -136,9 +141,17 @@ mod tests {
     fn roundtrip() {
         let cases = vec![
             DeepLinkTarget::Commit { id: "a".repeat(40) },
-            DeepLinkTarget::File { path: "src/主 文件.rs".into(), line: Some(42) },
-            DeepLinkTarget::Blame { path: "a/b.rs".into(), line: None },
-            DeepLinkTarget::Search { query: "fix: 泄漏".into() },
+            DeepLinkTarget::File {
+                path: "src/主 文件.rs".into(),
+                line: Some(42),
+            },
+            DeepLinkTarget::Blame {
+                path: "a/b.rs".into(),
+                line: None,
+            },
+            DeepLinkTarget::Search {
+                query: "fix: 泄漏".into(),
+            },
         ];
         for t in cases {
             let link = t.to_link();

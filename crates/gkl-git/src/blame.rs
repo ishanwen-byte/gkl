@@ -64,7 +64,11 @@ pub fn blame_from(
         cur_path = ppath;
         cur_line = pline;
     }
-    Ok(Some(LineBlame { commit: cur.id.clone(), line_no: cur_line, path_chain }))
+    Ok(Some(LineBlame {
+        commit: cur.id.clone(),
+        line_no: cur_line,
+        path_chain,
+    }))
 }
 
 /// 单步回溯。Some((父, 父路径, 父行号)) = 行未变可继续;None = 当前提交是答案。
@@ -92,9 +96,7 @@ fn step_back(
             }
             None => {
                 // 父无该路径:同 oid 纯改名跟随。
-                if let Some(old_path) =
-                    crate::diff::find_rename(repo, parent_id, &cur.id, path)?
-                {
+                if let Some(old_path) = crate::diff::find_rename(repo, parent_id, &cur.id, path)? {
                     path_chain.push(old_path.clone());
                     // 纯改名行号不变。
                     return Ok(Some((parent_id.clone(), old_path, line)));
@@ -114,7 +116,12 @@ fn step_back(
 fn map_line(parent_blob: &[u8], cur_blob: &[u8], line: usize) -> Option<usize> {
     let diff = TextDiff::from_lines(parent_blob, cur_blob);
     for op in diff.ops() {
-        if let DiffOp::Equal { old_index, new_index, len } = op {
+        if let DiffOp::Equal {
+            old_index,
+            new_index,
+            len,
+        } = op
+        {
             // new 段覆盖 0-based [new_index, new_index+len);目标行 line-1 落在内则映射。
             let n0 = line - 1;
             if n0 >= *new_index && n0 < *new_index + len {
@@ -137,7 +144,9 @@ mod tests {
     #[test]
     fn self_blame() {
         let r = Repo::open(env!("CARGO_MANIFEST_DIR")).unwrap();
-        let hit = blame_line(&r, "crates/gkl-git/src/blame.rs", 1).unwrap().unwrap();
+        let hit = blame_line(&r, "crates/gkl-git/src/blame.rs", 1)
+            .unwrap()
+            .unwrap();
         assert_eq!(hit.commit.len(), 40);
     }
 

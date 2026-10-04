@@ -24,7 +24,11 @@ pub struct ScanReport {
 
 /// 遍历起点:全历史模式用 --all(全部 refs),否则 HEAD。
 fn start_ref(all: bool) -> &'static str {
-    if all { "--all" } else { "HEAD" }
+    if all {
+        "--all"
+    } else {
+        "HEAD"
+    }
 }
 
 /// 执行一次扫描。
@@ -33,7 +37,11 @@ fn start_ref(all: bool) -> &'static str {
 /// 改写检测:上次 tip 不在新历史里 -> 全量重建。
 pub fn scan(repo: &Repo, db: &Db, force: bool, all: bool) -> anyhow::Result<ScanReport> {
     let tip = repo.head_id()?;
-    let mode = if all { WalkMode::All } else { WalkMode::FirstParent };
+    let mode = if all {
+        WalkMode::All
+    } else {
+        WalkMode::FirstParent
+    };
 
     if force || !db.is_fresh() {
         db.reset()?;
@@ -42,7 +50,12 @@ pub fn scan(repo: &Repo, db: &Db, force: bool, all: bool) -> anyhow::Result<Scan
         if all {
             db.rebuild_churn(repo, &metas)?;
         }
-        return Ok(ScanReport { new_commits: metas.len(), total, tip, all_history: all });
+        return Ok(ScanReport {
+            new_commits: metas.len(),
+            total,
+            tip,
+            all_history: all,
+        });
     }
 
     let last_tip = db.last_tip()?.unwrap_or_default();
@@ -52,7 +65,12 @@ pub fn scan(repo: &Repo, db: &Db, force: bool, all: bool) -> anyhow::Result<Scan
             let metas = gkl_git::walk::walk(repo, "HEAD", None, WalkMode::All, usize::MAX)?;
             db.rebuild_churn(repo, &metas)?;
         }
-        return Ok(ScanReport { new_commits: 0, total: db.len()?, tip, all_history: all });
+        return Ok(ScanReport {
+            new_commits: 0,
+            total: db.len()?,
+            tip,
+            all_history: all,
+        });
     }
 
     // 改写检测:旧 tip 是否仍可达。
@@ -92,7 +110,12 @@ pub fn scan(repo: &Repo, db: &Db, force: bool, all: bool) -> anyhow::Result<Scan
     if all {
         db.rebuild_churn(repo, &metas)?;
     }
-    Ok(ScanReport { new_commits: metas.len(), total, tip, all_history: all })
+    Ok(ScanReport {
+        new_commits: metas.len(),
+        total,
+        tip,
+        all_history: all,
+    })
 }
 
 /// 读出全部提交,按时间倒序。

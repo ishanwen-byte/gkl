@@ -31,7 +31,11 @@ pub fn ask(cfg: &LlmConfig, db: &Db, question: &str) -> anyhow::Result<Answer> {
         .as_str()
         .unwrap_or("(LLM 返回了空回答)")
         .to_string();
-    Ok(Answer { text, evidence: vec![], engine: Engine::Llm })
+    Ok(Answer {
+        text,
+        evidence: vec![],
+        engine: Engine::Llm,
+    })
 }
 
 /// 组装给 LLM 的上下文摘要。
@@ -42,7 +46,10 @@ fn build_context(db: &Db, recent: usize) -> anyhow::Result<String> {
     let authors = gkl_core::query::authors(db, 8)?;
     s.push_str("作者排行(前 8):\n");
     for a in &authors {
-        s.push_str(&format!("- {} <{}>: {} commits\n", a.name, a.email, a.commits));
+        s.push_str(&format!(
+            "- {} <{}>: {} commits\n",
+            a.name, a.email, a.commits
+        ));
     }
 
     let months = gkl_core::query::activity_by_month(db)?;
@@ -56,7 +63,12 @@ fn build_context(db: &Db, recent: usize) -> anyhow::Result<String> {
 
     s.push_str("\n最近提交(倒序):\n");
     for m in recent_commits(db, recent)? {
-        s.push_str(&format!("- {} {} {}\n", &m.id[..7], date_str(m.author_time), m.message_subject));
+        s.push_str(&format!(
+            "- {} {} {}\n",
+            &m.id[..7],
+            date_str(m.author_time),
+            m.message_subject
+        ));
     }
     Ok(s)
 }
@@ -64,7 +76,10 @@ fn build_context(db: &Db, recent: usize) -> anyhow::Result<String> {
 fn recent_commits(db: &Db, n: usize) -> anyhow::Result<Vec<CommitMeta>> {
     gkl_core::query::log(
         db,
-        &gkl_core::query::LogFilter { limit: n, ..Default::default() },
+        &gkl_core::query::LogFilter {
+            limit: n,
+            ..Default::default()
+        },
     )
 }
 

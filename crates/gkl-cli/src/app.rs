@@ -7,7 +7,11 @@ use gkl_db::Db;
 use gkl_git::Repo;
 
 #[derive(Parser)]
-#[command(name = "gkl", version, about = "git 历史考古:索引、查询、AI 问答、深链接")]
+#[command(
+    name = "gkl",
+    version,
+    about = "git 历史考古:索引、查询、AI 问答、深链接"
+)]
 struct Cli {
     /// 仓库路径(默认当前目录)。
     #[arg(long, global = true)]
@@ -78,9 +82,17 @@ enum LinkTarget {
     /// 链接到提交。
     Commit { id: String },
     /// 链接到文件。
-    File { path: String, #[arg(long)] line: Option<u32> },
+    File {
+        path: String,
+        #[arg(long)]
+        line: Option<u32>,
+    },
     /// 链接到 blame 视图。
-    Blame { path: String, #[arg(long)] line: Option<u32> },
+    Blame {
+        path: String,
+        #[arg(long)]
+        line: Option<u32>,
+    },
     /// 链接到搜索。
     Search { query: String },
 }
@@ -101,23 +113,47 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Scan { force, all } => {
             let r = gkl_db::scan::scan(&repo, &db, force, all)?;
             if cli.json {
-                println!("{}", serde_json::json!({"new": r.new_commits, "total": r.total, "tip": r.tip, "all": r.all_history}));
+                println!(
+                    "{}",
+                    serde_json::json!({"new": r.new_commits, "total": r.total, "tip": r.tip, "all": r.all_history})
+                );
             } else {
                 let mode = if r.all_history { "全历史" } else { "主线" };
-                println!("已索引 {} 个提交({}模式,新增 {},tip {})", r.total, mode, r.new_commits, &r.tip[..7]);
+                println!(
+                    "已索引 {} 个提交({}模式,新增 {},tip {})",
+                    r.total,
+                    mode,
+                    r.new_commits,
+                    &r.tip[..7]
+                );
             }
         }
-        Cmd::Log { author, grep, limit } => {
+        Cmd::Log {
+            author,
+            grep,
+            limit,
+        } => {
             ensure_scanned(&db)?;
             let list = gkl_core::query::log(
                 &db,
-                &gkl_core::query::LogFilter { author, grep, limit, ..Default::default() },
+                &gkl_core::query::LogFilter {
+                    author,
+                    grep,
+                    limit,
+                    ..Default::default()
+                },
             )?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&list)?);
             } else {
                 for m in list {
-                    println!("{} {} {:<12} {}", &m.id[..7], date_str(m.author_time), m.author_name, m.message_subject);
+                    println!(
+                        "{} {} {:<12} {}",
+                        &m.id[..7],
+                        date_str(m.author_time),
+                        m.author_name,
+                        m.message_subject
+                    );
                 }
             }
         }
@@ -175,7 +211,12 @@ pub fn run() -> anyhow::Result<()> {
             } else {
                 println!("commit {}", m.id);
                 println!("Author: {} <{}>", m.author_name, m.author_email);
-                println!("Date:   {} ({:+03}:{:02})", date_str(m.author_time), m.author_tz_offset / 60, m.author_tz_offset.abs() % 60);
+                println!(
+                    "Date:   {} ({:+03}:{:02})",
+                    date_str(m.author_time),
+                    m.author_tz_offset / 60,
+                    m.author_tz_offset.abs() % 60
+                );
                 debug_assert!((-720..=840).contains(&m.author_tz_offset), "tz 应为分钟制");
                 if m.is_merge {
                     println!("Merge: {}", m.parents.join(" "));
@@ -183,7 +224,10 @@ pub fn run() -> anyhow::Result<()> {
                 println!();
                 println!("    {}", m.message_subject);
                 println!();
-                println!("深链接: {}", DeepLinkTarget::Commit { id: m.id.clone() }.to_link());
+                println!(
+                    "深链接: {}",
+                    DeepLinkTarget::Commit { id: m.id.clone() }.to_link()
+                );
             }
         }
         Cmd::Blame { path, line } => {
@@ -197,17 +241,33 @@ pub fn run() -> anyhow::Result<()> {
                         String::new()
                     };
                     if cli.json {
-                        println!("{}", serde_json::json!({
-                            "path": path, "line": line,
-                            "commit": h.commit, "author": m.author_name,
-                            "date": date_str(m.author_time), "subject": m.message_subject,
-                            "path_chain": h.path_chain,
-                            "link": DeepLinkTarget::Blame { path: path.clone(), line: Some(line as u32) }.to_link(),
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "path": path, "line": line,
+                                "commit": h.commit, "author": m.author_name,
+                                "date": date_str(m.author_time), "subject": m.message_subject,
+                                "path_chain": h.path_chain,
+                                "link": DeepLinkTarget::Blame { path: path.clone(), line: Some(line as u32) }.to_link(),
+                            })
+                        );
                     } else {
-                        println!("{} {} ({} {})", &h.commit[..7], m.message_subject, m.author_name, date_str(m.author_time));
+                        println!(
+                            "{} {} ({} {})",
+                            &h.commit[..7],
+                            m.message_subject,
+                            m.author_name,
+                            date_str(m.author_time)
+                        );
                         println!("{}", chain.trim_end_matches('\n'));
-                        println!("深链接: {}", DeepLinkTarget::Blame { path: path.clone(), line: Some(line as u32) }.to_link());
+                        println!(
+                            "深链接: {}",
+                            DeepLinkTarget::Blame {
+                                path: path.clone(),
+                                line: Some(line as u32)
+                            }
+                            .to_link()
+                        );
                     }
                 }
                 None => println!("未找到 blame"),
@@ -263,7 +323,13 @@ pub fn run() -> anyhow::Result<()> {
                         let hit = gkl_git::blame::blame_line(&repo, &path, line as usize)?;
                         if let Some(h) = hit {
                             let m = repo.commit_meta(&h.commit)?;
-                            println!("{} {} ({} {})", &h.commit[..7], m.message_subject, m.author_name, date_str(m.author_time));
+                            println!(
+                                "{} {} ({} {})",
+                                &h.commit[..7],
+                                m.message_subject,
+                                m.author_name,
+                                date_str(m.author_time)
+                            );
                         } else {
                             println!("未找到");
                         }
@@ -288,7 +354,11 @@ fn ensure_scanned(db: &Db) -> anyhow::Result<()> {
 fn repo_workdir(repo: &Repo) -> String {
     // 索引放 .git/ 下,天然随仓库走、不污染工作区。bare 仓库则退到当前目录。
     match repo.workdir() {
-        Some(p) => p.to_string_lossy().trim_end_matches('\\').trim_end_matches('/').to_string(),
+        Some(p) => p
+            .to_string_lossy()
+            .trim_end_matches('\\')
+            .trim_end_matches('/')
+            .to_string(),
         None => ".".into(),
     }
 }

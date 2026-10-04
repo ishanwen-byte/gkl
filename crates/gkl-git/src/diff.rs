@@ -62,7 +62,9 @@ pub fn tree_diff(repo: &Repo, lhs_rev: &str, rhs_rev: &str) -> anyhow::Result<Ve
         match change.event {
             Event::Addition { id, .. } => adds.push((path, id.to_hex().to_string())),
             Event::Deletion { id, .. } => dels.push((path, id.to_hex().to_string())),
-            Event::Modification { previous_id, id, .. } => out.push(FileChange {
+            Event::Modification {
+                previous_id, id, ..
+            } => out.push(FileChange {
                 path,
                 old_path: None,
                 kind: ChangeKind::Modification,
@@ -148,8 +150,16 @@ pub fn tree_diff_fast(
 ) -> anyhow::Result<Vec<FileChange>> {
     let rhs = tree_of(repo, rhs_rev)?;
     let mut out = Vec::new();
-    let empty = if lhs_rev == "empty" { Some(empty_tree(repo)?) } else { None };
-    let lhs = if lhs_rev == "empty" { None } else { Some(tree_of(repo, lhs_rev)?) };
+    let empty = if lhs_rev == "empty" {
+        Some(empty_tree(repo)?)
+    } else {
+        None
+    };
+    let lhs = if lhs_rev == "empty" {
+        None
+    } else {
+        Some(tree_of(repo, lhs_rev)?)
+    };
     let mut platform = match (&empty, &lhs) {
         (Some(e), _) => e.changes()?,
         (_, Some(l)) => l.changes()?,
@@ -187,7 +197,9 @@ pub fn tree_diff_fast(
                 old_oid: Some(id.to_hex().to_string()),
                 new_oid: None,
             }),
-            Event::Modification { previous_id, id, .. } => out.push(FileChange {
+            Event::Modification {
+                previous_id, id, ..
+            } => out.push(FileChange {
                 path,
                 old_path: None,
                 kind: ChangeKind::Modification,
@@ -205,10 +217,7 @@ pub fn tree_diff_fast(
 
 /// 空树对象(git 约定 oid 4b825dc...,每个仓库都有)。
 fn empty_tree<'a>(repo: &'a Repo) -> anyhow::Result<gix::Tree<'a>> {
-    let oid = gix::hash::ObjectId::from_hex(
-        b"4b825dc642cb6eb9a060e54bf8d69288fbee4904",
-    )
-    .unwrap();
+    let oid = gix::hash::ObjectId::from_hex(b"4b825dc642cb6eb9a060e54bf8d69288fbee4904").unwrap();
     let obj = repo.repo.find_object(oid)?;
     Ok(obj.try_into_tree()?)
 }
