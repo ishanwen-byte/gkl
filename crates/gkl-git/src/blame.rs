@@ -5,11 +5,13 @@
 //! 2. 对每个提交 C 与其父 P:
 //!    - 单父:diff P->C 的 blob,similar 把行号映射回 P;行未变则继续,变了则 C 是答案。
 //!    - merge:逐父尝试,P1 行未变则走 P1;否则试 P2(穿透到侧支,git 默认语义)。
-//!    - 父无该路径:diff.rs 的同 oid 配对识别纯改名,跟随旧路径继续。
+//!    - 父无该路径:先试同 oid 纯改名;再试相似度改名(≥0.5,git -M 简化版),
+//!      旧内容行映射决定继续回溯还是终止。
 //! 3. 到根提交即答案(该行自初始就存在)。
 //!
-//! 已知偏差:rename 只识别同 oid 搬家(纯改名/git mv);
-//! 改名同时改内容会断链(git -M 相似度匹配,README 已记录)。
+//! 已知偏差:相似度匹配是逐提交局部判断,极小文件(几行)可能因阈值
+//! 产生误配;git -M 还有文件大小下限与全仓扫描优化,这里只看本提交的
+//! Deletion 候选(足够覆盖典型 refactor 场景)。
 
 use crate::repo::Repo;
 use similar::{DiffOp, TextDiff};
@@ -106,6 +108,18 @@ fn step_back(
                     path_chain.push(old_path.clone());
                     // 纯改名行号不变。
                     return Ok(Some((parent_id.clone(), old_path, line)));
+                }
+                // 相似度改名跟随(git -M 简化版):改名同时改内容的场景。
+                if let Some((old_path, old_blob)) =
+                    crate::diff::find_rename_similar(repo, parent_id, &cur.id, &cur_blob)?
+                {
+                    // 旧内容里的行号映射:目标行未变则继续回溯,变了则本提交是答案。
+                    if let Some(parent_line) = map_line(&old_blob, &cur_blob, line) {
+                        path_chain.push(old_path.clone());
+                        return Ok(Some((parent_id.clone(), old_path, parent_line)));
+                    }
+                    // 行在本次改名提交中新建:当前提交即答案。
+                    return Ok(None);
                 }
                 if i == cur.parents.len() - 1 {
                     return Ok(None);

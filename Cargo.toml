@@ -15,6 +15,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 gix = { version = "0.58.0", default-features = false, features = ["comfort", "revparse-regex", "revision", "mailmap", "blob-diff"] }
+regex = "1"
 similar = { version = "2", features = ["bytes"] }
 redb = "4.3.0"
 clap = { version = "4", features = ["derive"] }

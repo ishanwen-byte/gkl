@@ -4,6 +4,7 @@ use gkl_git::repo::CommitMeta;
 use rayon::prelude::*;
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 /// 索引结构版本。结构变化时递增,旧库自动重建。
 /// v1: 初始。v2: author_tz_offset 从秒修正为分钟。
@@ -215,6 +216,9 @@ impl Db {
         // 并行:每线程独立开 Repo(gix Repository 非 Sync),互不共享缓存;
         // 结果按文件路径 reduce 合并。万提交仓库从串行约 30min 降到分钟级。
         let workdir = repo.workdir().unwrap_or_else(|| ".".into());
+        // partial clone 检测:blob 读不到时累计缺失次数,结束后统一提示,
+        // 避免行数静默为 0 误导用户。
+        let missing = std::sync::atomic::AtomicUsize::new(0);
         let per_file: std::collections::HashMap<String, ChurnEntry> = metas
             .par_iter()
             .map_init(
@@ -239,26 +243,35 @@ impl Db {
                         match ch.kind {
                             gkl_git::diff::ChangeKind::Addition => {
                                 if let Some(hex) = &ch.new_oid {
-                                    if let Some(blob) = r.blob_by_oid(hex) {
-                                        e.added = count_lines(&blob);
+                                    match r.blob_by_oid(hex) {
+                                        Some(blob) => e.added = count_lines(&blob),
+                                        None => {
+                                            missing.fetch_add(1, Ordering::Relaxed);
+                                        }
                                     }
                                 }
                             }
                             gkl_git::diff::ChangeKind::Modification => {
                                 if let (Some(o), Some(n)) = (&ch.old_oid, &ch.new_oid) {
-                                    if let (Some(ob), Some(nb)) =
-                                        (r.blob_by_oid(o), r.blob_by_oid(n))
-                                    {
-                                        let (a, d) = line_delta_raw(&ob, &nb);
-                                        e.added = a;
-                                        e.deleted = d;
+                                    match (r.blob_by_oid(o), r.blob_by_oid(n)) {
+                                        (Some(ob), Some(nb)) => {
+                                            let (a, d) = line_delta_raw(&ob, &nb);
+                                            e.added = a;
+                                            e.deleted = d;
+                                        }
+                                        _ => {
+                                            missing.fetch_add(1, Ordering::Relaxed);
+                                        }
                                     }
                                 }
                             }
                             gkl_git::diff::ChangeKind::Deletion => {
                                 if let Some(hex) = &ch.old_oid {
-                                    if let Some(blob) = r.blob_by_oid(hex) {
-                                        e.deleted = count_lines(&blob);
+                                    match r.blob_by_oid(hex) {
+                                        Some(blob) => e.deleted = count_lines(&blob),
+                                        None => {
+                                            missing.fetch_add(1, Ordering::Relaxed);
+                                        }
                                     }
                                 }
                             }
@@ -305,6 +318,16 @@ impl Db {
             }
         }
         txn.commit()?;
+        let missed = missing.load(Ordering::Relaxed);
+        if missed > 0 {
+            // 非致命:提交计数仍准确,只是行数缺失。stderr 提示不污染 JSON 输出。
+            eprintln!(
+                "警告: {} 个文件变更的 blob 不在本地(疑似 partial clone),\
+             增删行数缺失、变更次数不受影响。\
+             解决: git fetch --refetch --no-filter 后 gkl scan --all --force",
+                missed
+            );
+        }
         Ok(())
     }
 

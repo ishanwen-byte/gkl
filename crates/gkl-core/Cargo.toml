@@ -9,5 +9,6 @@ gkl-git = { path = "../gkl-git" }
 gkl-db = { path = "../gkl-db" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

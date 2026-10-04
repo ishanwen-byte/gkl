@@ -23,11 +23,12 @@ cargo build --release
 gkl scan                 # 建立主线索引(增量;--force 全量重建)
 gkl scan --all           # 全历史索引(全部 refs,含侧链;顺带建 churn)
 gkl log --limit 20       # 提交日志(支持 --author/--grep 过滤)
+gkl log --grep "SAD|satd" --grep-regex   # 正则过滤(Rust regex 方言,大小写不敏感)
 gkl authors              # 作者统计(mailmap 归一)
 gkl activity             # 月度活动柱状图
 gkl churn                # 文件级热点(按变更次数;--by-lines 按行数)
 gkl show <rev>           # 提交详情 + 深链接
-gkl blame <path> <line>  # 这行代码最后被谁改的(穿透 merge + rename 跟随)
+gkl blame <path> <line>  # 这行代码最后被谁改的(穿透 merge + 改名跟随,含相似度匹配)
 gkl ask "热点在哪"        # AI 问答
 ```
 
@@ -79,10 +80,12 @@ crates/
 
 ## 已知限制(路线图)
 
-- blame 的 rename 只识别同 oid 搬家(纯改名/git mv);改名同时改内容会断链(git -M 相似度匹配)
+- blame 相似度改名是逐提交局部判断(阈值 0.5,同 git 默认):极小文件可能误配;
+  git -M 的全仓扫描与文件大小下限未实现,典型 refactor 拆分/改名场景已覆盖
 - churn 重建每次全量重算,未做增量;极少数不合规提交对象(空 gpgsig 值等)会被跳过并警告
 - churn 行数与 git numstat 存在极小差异:similar 与 git 对个别 Replace 块切分不同(gitoxide 仓库 Cargo.lock 2070 提交中 6 提交有 1~15 行差,总差 23/45857 ≈ 0.05%)
-- LLM 问答依赖真实 API key;partial clone 缺 blob 时 blame 降级到可见提交(重扫需 `git fetch --refetch --no-filter`)
+- partial clone 缺 blob 时 churn 行数缺失(会警告并提示补拉取)、blame 降级到可见提交(重扫需 `git fetch --refetch --no-filter`)
+- LLM 问答依赖真实 API key
 
 ## Contributing
 

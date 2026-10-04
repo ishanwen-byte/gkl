@@ -44,6 +44,9 @@ enum Cmd {
         author: Option<String>,
         #[arg(long)]
         grep: Option<String>,
+        /// 把 --grep 当正则(Rust regex 方言,大小写不敏感,支持 SAD|satd 这类 OR)。
+        #[arg(long, requires = "grep")]
+        grep_regex: bool,
         #[arg(long, default_value = "30")]
         limit: usize,
     },
@@ -131,6 +134,7 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Log {
             author,
             grep,
+            grep_regex,
             limit,
         } => {
             ensure_scanned(&db)?;
@@ -139,6 +143,7 @@ pub fn run() -> anyhow::Result<()> {
                 &gkl_core::query::LogFilter {
                     author,
                     grep,
+                    grep_regex,
                     limit,
                     ..Default::default()
                 },

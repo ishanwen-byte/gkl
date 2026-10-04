@@ -10,6 +10,9 @@ pub struct LogFilter {
     pub author: Option<String>,
     /// 子串匹配,大小写不敏感(同时匹配原始与 mailmap 归一身份)。
     pub grep: Option<String>,
+    /// 把 grep 当正则(大小写不敏感);与 git log --grep 的 basic 正则不同,
+    /// 这里用 Rust regex 方言(支持 SAD|satd 这类 OR)。
+    pub grep_regex: bool,
     /// author_time 下界(Unix 秒)。
     pub since: Option<i64>,
     /// author_time 上界(Unix 秒)。
@@ -17,28 +20,55 @@ pub struct LogFilter {
     pub limit: usize,
 }
 
-/// 按(倒序)过滤已索引提交。
-pub fn log(db: &Db, f: &LogFilter) -> anyhow::Result<Vec<CommitMeta>> {
-    let mut all = gkl_db::scan::commits_desc(db)?;
+/// 按过滤器匹配单条提交(grep 正则/子串,author 子串)。
+fn matches(m: &CommitMeta, f: &LogFilter, re: Option<&regex::Regex>) -> bool {
     if let Some(a) = &f.author {
         let a = a.to_lowercase();
-        all.retain(|m| {
-            m.author_name.to_lowercase().contains(&a)
-                || m.author_email.to_lowercase().contains(&a)
-                || m.author_name_mapped.to_lowercase().contains(&a)
-                || m.author_email_mapped.to_lowercase().contains(&a)
-        });
+        if !(m.author_name.to_lowercase().contains(&a)
+            || m.author_email.to_lowercase().contains(&a)
+            || m.author_name_mapped.to_lowercase().contains(&a)
+            || m.author_email_mapped.to_lowercase().contains(&a))
+        {
+            return false;
+        }
     }
     if let Some(g) = &f.grep {
-        let g = g.to_lowercase();
-        all.retain(|m| m.message_subject.to_lowercase().contains(&g));
+        let subject = m.message_subject.to_lowercase();
+        let hit = match re {
+            Some(re) => re.is_match(&subject),
+            None => subject.contains(&g.to_lowercase()),
+        };
+        if !hit {
+            return false;
+        }
     }
     if let Some(s) = f.since {
-        all.retain(|m| m.author_time >= s);
+        if m.author_time < s {
+            return false;
+        }
     }
     if let Some(u) = f.until {
-        all.retain(|m| m.author_time <= u);
+        if m.author_time > u {
+            return false;
+        }
     }
+    true
+}
+
+/// 按(倒序)过滤已索引提交。
+pub fn log(db: &Db, f: &LogFilter) -> anyhow::Result<Vec<CommitMeta>> {
+    // 正则只编译一次,158k 提交过滤仍在亚秒级。
+    let re = match (&f.grep, f.grep_regex) {
+        (Some(g), true) => Some(
+            regex::RegexBuilder::new(g)
+                .case_insensitive(true)
+                .build()
+                .map_err(|e| anyhow::anyhow!("--grep 正则无效: {e}"))?,
+        ),
+        _ => None,
+    };
+    let mut all = gkl_db::scan::commits_desc(db)?;
+    all.retain(|m| matches(m, f, re.as_ref()));
     all.truncate(f.limit);
     Ok(all)
 }
