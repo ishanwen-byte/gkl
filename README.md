@@ -80,9 +80,8 @@ crates/
 ## 已知限制(路线图)
 
 - blame 的 rename 只识别同 oid 搬家(纯改名/git mv);改名同时改内容会断链(git -M 相似度匹配)
-- churn 行数只统计 Addition/Modification,Deletion 不计行数
-- 全历史首次扫描(约万提交)单线程约半小时;churn 重建每次全量重算,未做增量
-- LLM 问答依赖真实 API key;partial clone 缺 blob 时报错并提示 `git fetch --refetch --no-filter`
+- 全历史首次扫描(约万提交)已并行化(rayon),分钟级;churn 重建每次全量重算,未做增量
+- LLM 问答依赖真实 API key;partial clone 缺 blob 时 blame 降级到可见提交(重扫需 `git fetch --refetch --no-filter`)
 
 ## Contributing
 

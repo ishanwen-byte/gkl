@@ -255,6 +255,13 @@ impl Db {
                                     }
                                 }
                             }
+                            gkl_git::diff::ChangeKind::Deletion => {
+                                if let Some(hex) = &ch.old_oid {
+                                    if let Some(blob) = r.blob_by_oid(hex) {
+                                        e.deleted = count_lines(&blob);
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         local.push((ch.path, e));
