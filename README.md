@@ -2,6 +2,8 @@
 
 只读分析 git 仓库历史的命令行工具。Rust + [gitoxide](https://github.com/GitoxideLabs/gitoxide) + [redb](https://github.com/cberner/redb) 索引引擎 + AI 问答,支持 `gkl://` 深链接。
 
+[![CI](https://github.com/ishanwen-byte/gkl/actions/workflows/ci.yml/badge.svg)](https://github.com/ishanwen-byte/gkl/actions/workflows/ci.yml)
+
 ## 设计原则
 
 - **只读**:不写仓库、不跑 hook、不执行仓库内任何代码
@@ -82,6 +84,10 @@ crates/
 - 全历史首次扫描(约万提交)单线程约半小时;churn 重建每次全量重算,未做增量
 - LLM 问答依赖真实 API key;partial clone 缺 blob 时报错并提示 `git fetch --refetch --no-filter`
 
+## Contributing
+
+欢迎 issue 与 PR。CI 会跑 build / test / clippy / fmt。
+
 ## 许可
 
-MIT OR Apache-2.0
+双许可,见 [LICENSE-MIT](LICENSE-MIT) 与 [LICENSE-APACHE](LICENSE-APACHE)。
