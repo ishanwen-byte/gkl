@@ -30,25 +30,18 @@ pub fn walk(
         // 全部 refs 的 tips(本地/远程分支、标签)。annotated tag 要 peel 到提交
         // (与 git rev-list --all 一致),否则 tag 对象指向的提交会被漏掉。
         let mut tips: Vec<gix::hash::ObjectId> = Vec::new();
-        match repo.repo.references() {
-            Ok(platform) => match platform.all() {
-                Ok(iter) => {
-                    for rref in iter.flatten() {
-                        // 跳过 symbolic ref(如 HEAD):id() 会 panic;
-                        // 它指向的目标分支本身会被枚举到。
-                        if rref.target().try_id().is_none() {
-                            continue;
-                        }
-                        if let Some(oid) = rref.target().try_id() {
-                            if let Some(c) = peel_to_commit(repo, oid.to_owned()) {
-                                tips.push(c);
-                            }
+        if let Ok(platform) = repo.repo.references() {
+            if let Ok(iter) = platform.all() {
+                for rref in iter.flatten() {
+                    // 跳过 symbolic ref(如 HEAD):id() 会 panic;
+                    // 它指向的目标分支本身会被枚举到。
+                    if let Some(oid) = rref.target().try_id() {
+                        if let Some(c) = peel_to_commit(repo, oid.to_owned()) {
+                            tips.push(c);
                         }
                     }
                 }
-                Err(_) => {}
-            },
-            Err(_) => {}
+            }
         }
         repo.repo.rev_walk(tips)
     } else {
@@ -60,10 +53,11 @@ pub fn walk(
     }
 
     let stop = stop_oid;
-    let iter = platform.selected(move |id| Some(id) != stop.as_ref().map(|v| &**v))?;
+    let iter = platform.selected(move |id| Some(id) != stop.as_deref())?;
     for info in iter {
         let id = info?.id;
-        let meta = repo.commit_meta(&id.to_hex().to_string())?;
+        // oid 直达,免逐提交 rev-parse。
+        let meta = repo.commit_meta_by_oid(&id)?;
         out.push(meta);
         if out.len() >= limit {
             break;

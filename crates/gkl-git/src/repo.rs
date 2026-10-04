@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 /// 只读仓库句柄。包一层,限制在 gkl 内部统一 API 面。
 pub struct Repo {
     pub(crate) repo: gix::Repository,
+    /// mailmap 快照缓存(避免每提交重建,万提交仓库省 O(n) 次文件解析)。
+    mailmap: std::cell::OnceCell<gix::mailmap::Snapshot>,
 }
 
 /// 提交摘要,索引与展示共用。
@@ -40,7 +42,7 @@ pub struct CommitMeta {
 pub struct OpenError {
     path: PathBuf,
     #[source]
-    source: gix::discover::Error,
+    source: Box<gix::discover::Error>,
 }
 
 impl Repo {
@@ -48,28 +50,36 @@ impl Repo {
     /// bare 仓库目录。与 git 命令行行为一致。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, OpenError> {
         let path = path.as_ref().to_path_buf();
-        let repo = gix::discover(&path).map_err(|source| OpenError { path, source })?;
-        Ok(Self { repo })
+        let repo = gix::discover(&path).map_err(|source| OpenError {
+            path,
+            source: Box::new(source),
+        })?;
+        // 对象缓存:批量遍历/churn 时同一 blob/commit 会被多次读取,
+        // 内存换 IO(gix 推荐,容量约 64MB)。
+        let mut repo = repo;
+        repo.object_cache_size(64 * 1024 * 1024);
+        Ok(Self {
+            repo,
+            mailmap: std::cell::OnceCell::new(),
+        })
     }
 
-    /// 仓库的 mailmap 快照(.mailmap 文件解析结果)。
-    pub fn mailmap(&self) -> gix::mailmap::Snapshot {
-        self.repo.open_mailmap()
+    /// 仓库的 mailmap 快照(.mailmap 文件解析结果)。首次调用后缓存。
+    pub fn mailmap(&self) -> &gix::mailmap::Snapshot {
+        self.mailmap.get_or_init(|| self.repo.open_mailmap())
     }
 
     /// 仓库工作目录(仓库为 bare 时返回 None)。
     pub fn workdir(&self) -> Option<std::path::PathBuf> {
-        self.repo.work_dir().map(|p: &std::path::Path| p.to_path_buf())
+        self.repo
+            .work_dir()
+            .map(|p: &std::path::Path| p.to_path_buf())
     }
 
     /// HEAD 指向的提交 id。
     pub fn head_id(&self) -> anyhow::Result<String> {
         let mut head = self.repo.head()?;
-        let id = head
-            .peel_to_commit_in_place()?
-            .id()
-            .to_hex()
-            .to_string();
+        let id = head.peel_to_commit_in_place()?.id().to_hex().to_string();
         Ok(id)
     }
 
@@ -82,8 +92,12 @@ impl Repo {
     /// 读取提交元数据。接受完整或短 hash、分支名等任意 rev。
     pub fn commit_meta(&self, id: &str) -> anyhow::Result<CommitMeta> {
         let oid = self.repo.rev_parse_single(id.as_bytes())?.detach();
-        let obj = self.repo.find_object(oid)?;
-        let commit = obj.try_into_commit()?;
+        self.commit_meta_by_oid(&oid)
+    }
+
+    /// oid 直达(免 rev-parse)。批量遍历热路径用。
+    pub fn commit_meta_by_oid(&self, oid: &gix::hash::oid) -> anyhow::Result<CommitMeta> {
+        let commit = self.repo.find_object(oid)?.try_into_commit()?;
         let cid = commit.id();
         let c: CommitRef = commit.decode()?;
         Ok(self.meta_of(&cid.to_hex().to_string(), &c))
@@ -94,8 +108,11 @@ impl Repo {
         let a = &c.author;
         let cm = &c.committer;
         let parent_count = c.parents.iter().count();
-        let mailmap = self.mailmap();
-        let (an, ae) = resolve_signature(&mailmap, &a.name.to_str_lossy(), &a.email.to_str_lossy());
+        let (an, ae) = resolve_signature(
+            self.mailmap(),
+            &a.name.to_str_lossy(),
+            &a.email.to_str_lossy(),
+        );
         CommitMeta {
             id: id.to_string(),
             author_name: a.name.to_str_lossy().into_owned(),
@@ -107,11 +124,7 @@ impl Repo {
             committer_name: cm.name.to_str_lossy().into_owned(),
             committer_email: cm.email.to_str_lossy().into_owned(),
             committer_time: cm.time.seconds,
-            message_subject: c
-                .message()
-                .summary()
-                .to_str_lossy()
-                .into_owned(),
+            message_subject: c.message().summary().to_str_lossy().into_owned(),
             parents: c
                 .parents
                 .iter()

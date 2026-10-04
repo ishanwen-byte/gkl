@@ -27,7 +27,8 @@ pub fn answer(repo: &Repo, db: &Db, q: &str) -> anyhow::Result<Option<Answer>> {
     }
 
     // 模式:作者排行
-    if q_lower.contains("排行") || q_lower.contains("贡献") || q_lower.contains("统计作者") {
+    if q_lower.contains("排行") || q_lower.contains("贡献") || q_lower.contains("统计作者")
+    {
         return Ok(Some(top_authors(db)?));
     }
 
@@ -54,7 +55,7 @@ fn extract_path(q: &str) -> Option<String> {
 fn who_wrote(repo: &Repo, db: &Db, path: &str) -> anyhow::Result<Option<Answer>> {
     let head = repo.head_id()?;
     // 文件在 HEAD 的大小,判断存在性。
-    let Some(blob) = repo.blob_at(&head, &path)? else {
+    let Some(blob) = repo.blob_at(&head, path)? else {
         return Ok(None);
     };
     let lines = blob.iter().filter(|&&b| b == b'\n').count().max(1);
@@ -62,8 +63,16 @@ fn who_wrote(repo: &Repo, db: &Db, path: &str) -> anyhow::Result<Option<Answer>>
     let in_index = db.commit(&meta.id)?.is_some();
     let _ = in_index;
     let evidence = vec![
-        DeepLinkTarget::File { path: path.into(), line: Some(1) }.to_link(),
-        DeepLinkTarget::Blame { path: path.into(), line: Some(1) }.to_link(),
+        DeepLinkTarget::File {
+            path: path.into(),
+            line: Some(1),
+        }
+        .to_link(),
+        DeepLinkTarget::Blame {
+            path: path.into(),
+            line: Some(1),
+        }
+        .to_link(),
     ];
     Ok(Some(Answer {
         text: format!(
@@ -81,18 +90,40 @@ fn hotspots(repo: &Repo, db: &Db) -> anyhow::Result<Answer> {
         let mut text = String::from("churn 热点(按变更次数,前 5):\n");
         let mut evidence = Vec::new();
         for (p, e) in list.iter().take(5) {
-            text.push_str(&format!("  {}c +{} -{} {}\n", e.commits, e.added, e.deleted, p));
-            evidence.push(DeepLinkTarget::Blame { path: p.clone(), line: Some(1) }.to_link());
+            text.push_str(&format!(
+                "  {}c +{} -{} {}\n",
+                e.commits, e.added, e.deleted, p
+            ));
+            evidence.push(
+                DeepLinkTarget::Blame {
+                    path: p.clone(),
+                    line: Some(1),
+                }
+                .to_link(),
+            );
         }
-        Ok(Answer { text, evidence, engine: Engine::Heuristic })
+        Ok(Answer {
+            text,
+            evidence,
+            engine: Engine::Heuristic,
+        })
     } else {
         let _ = repo;
         let authors = gkl_core::query::authors(db, 3)?;
-        let mut text = String::from("churn 索引为空(运行 gkl scan --all 可得文件级热点)。当前提交数最多的作者:\n");
+        let mut text = String::from(
+            "churn 索引为空(运行 gkl scan --all 可得文件级热点)。当前提交数最多的作者:\n",
+        );
         for a in authors {
-            text.push_str(&format!("  {} <{}>: {} 次提交\n", a.name, a.email, a.commits));
+            text.push_str(&format!(
+                "  {} <{}>: {} 次提交\n",
+                a.name, a.email, a.commits
+            ));
         }
-        Ok(Answer { text, evidence: vec![], engine: Engine::Heuristic })
+        Ok(Answer {
+            text,
+            evidence: vec![],
+            engine: Engine::Heuristic,
+        })
     }
 }
 
@@ -100,7 +131,17 @@ fn top_authors(db: &Db) -> anyhow::Result<Answer> {
     let list = gkl_core::query::authors(db, 10)?;
     let mut text = String::from("作者排行(按提交数):\n");
     for (i, a) in list.iter().enumerate() {
-        text.push_str(&format!("{}. {} <{}>: {}\n", i + 1, a.name, a.email, a.commits));
+        text.push_str(&format!(
+            "{}. {} <{}>: {}\n",
+            i + 1,
+            a.name,
+            a.email,
+            a.commits
+        ));
     }
-    Ok(Answer { text, evidence: vec![], engine: Engine::Heuristic })
+    Ok(Answer {
+        text,
+        evidence: vec![],
+        engine: Engine::Heuristic,
+    })
 }
