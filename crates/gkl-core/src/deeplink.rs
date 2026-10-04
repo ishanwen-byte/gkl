@@ -116,7 +116,7 @@ fn percent_decode(s: &str) -> Result<String, DeepLinkError> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' {
-            if i + 2 >= bytes.len() + 1 {
+            if i + 2 > bytes.len() {
                 return Err(DeepLinkError("截断的百分号转义".into()));
             }
             let hex = std::str::from_utf8(&bytes[i + 1..i + 3])

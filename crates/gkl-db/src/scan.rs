@@ -121,6 +121,6 @@ pub fn scan(repo: &Repo, db: &Db, force: bool, all: bool) -> anyhow::Result<Scan
 /// 读出全部提交,按时间倒序。
 pub fn commits_desc(db: &Db) -> anyhow::Result<Vec<CommitMeta>> {
     let mut all = db.all_commits()?;
-    all.sort_by(|a, b| b.author_time.cmp(&a.author_time));
+    all.sort_by_key(|m| std::cmp::Reverse(m.author_time));
     Ok(all)
 }

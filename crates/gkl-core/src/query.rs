@@ -74,7 +74,7 @@ pub fn authors(db: &Db, limit: usize) -> anyhow::Result<Vec<AuthorStat>> {
         e.last = e.last.max(m.author_time);
     }
     let mut list: Vec<AuthorStat> = by.into_values().collect();
-    list.sort_by(|a, b| b.commits.cmp(&a.commits));
+    list.sort_by_key(|a| std::cmp::Reverse(a.commits));
     list.truncate(limit);
     Ok(list)
 }

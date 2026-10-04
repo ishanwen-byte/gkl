@@ -163,7 +163,7 @@ pub fn run() -> anyhow::Result<()> {
             }
             let mut list = db.all_churn()?;
             if by_lines {
-                list.sort_by(|a, b| (b.1.added + b.1.deleted).cmp(&(a.1.added + a.1.deleted)));
+                list.sort_by_key(|(_, e)| std::cmp::Reverse(e.added + e.deleted));
             }
             list.truncate(limit);
             if cli.json {

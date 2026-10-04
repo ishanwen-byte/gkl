@@ -320,7 +320,7 @@ impl Db {
                 serde_json::from_slice::<ChurnEntry>(v.value())?,
             ));
         }
-        out.sort_by(|a, b| b.1.commits.cmp(&a.1.commits));
+        out.sort_by_key(|(_, e)| std::cmp::Reverse(e.commits));
         Ok(out)
     }
 
