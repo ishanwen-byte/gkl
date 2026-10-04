@@ -21,6 +21,7 @@ pub fn walk(
     limit: usize,
 ) -> anyhow::Result<Vec<CommitMeta>> {
     let mut out = Vec::new();
+    let mut skipped = 0usize;
     let stop_oid = match end {
         Some(e) => Some(repo.repo.rev_parse_single(e.as_bytes())?.detach()),
         None => None,
@@ -57,11 +58,21 @@ pub fn walk(
     for info in iter {
         let id = info?.id;
         // oid 直达,免逐提交 rev-parse。
-        let meta = repo.commit_meta_by_oid(&id)?;
-        out.push(meta);
+        // 个别提交对象头不合规(如空 gpgsig 值)时 gitoxide decode 会拒;
+        // 跳过该提交但仍计数,与 git 宽容语义对齐,不让单点脏数据阻断全量扫描。
+        match repo.commit_meta_by_oid(&id) {
+            Ok(meta) => out.push(meta),
+            Err(e) => {
+                eprintln!("警告: 跳过无法解析的提交 {}: {}", id.to_hex(), e);
+                skipped += 1;
+            }
+        }
         if out.len() >= limit {
             break;
         }
+    }
+    if skipped > 0 {
+        eprintln!("警告: 共跳过 {skipped} 个无法解析的提交对象");
     }
     Ok(out)
 }
